@@ -1,3 +1,4 @@
+
 import { createServer } from "node:http"
 import { randomUUID } from "node:crypto"
 import { request } from "undici"
@@ -10,10 +11,11 @@ const videos = new Map()
 function isValidVideoUrl(value) {
   try {
     const url = new URL(value)
-    const host = url.hostname.toLowerCase()
 
     if (url.protocol !== "https:") return false
     if (url.username || url.password) return false
+
+    const host = url.hostname.toLowerCase()
 
     if (
       host === "localhost" ||
@@ -27,7 +29,17 @@ function isValidVideoUrl(value) {
       /^172\.(1[6-9]|2\d|3[01])\./.test(host)
     ) return false
 
+    // لینک دانلود Linkulu
+    if (
+      host === "cf.linkulu.com" &&
+      /^\/dl\/[a-f0-9]+$/i.test(url.pathname)
+    ) {
+      return true
+    }
+
+    // لینک مستقیم ویدئو
     return /\.(mp4|m4v|mov|webm)$/i.test(url.pathname)
+
   } catch {
     return false
   }
@@ -41,7 +53,9 @@ function startWebServer() {
         "http://localhost"
       ).pathname
 
-      const match = pathname.match(/^\/(watch|stream)\/([a-f0-9-]+)$/)
+      const match = pathname.match(
+        /^\/(watch|stream)\/([a-f0-9-]+)$/
+      )
 
       if (!match) {
         res.writeHead(404)
@@ -59,6 +73,7 @@ function startWebServer() {
         return
       }
 
+      // صفحه پخش
       if (action === "watch") {
         res.writeHead(200, {
           "Content-Type": "text/html; charset=utf-8",
@@ -95,16 +110,22 @@ p { color: #aaa; }
 </head>
 <body>
 <h2>HamoStream 🎬</h2>
-<video controls playsinline preload="metadata">
-<source src="/stream/${id}" type="video/mp4">
+
+<video
+  src="/stream/${id}"
+  controls
+  playsinline
+  preload="metadata">
 مرورگر شما از پخش ویدئو پشتیبانی نمی‌کند.
 </video>
+
 <p>پخش آنلاین توسط HamoStream</p>
 </body>
 </html>`)
         return
       }
 
+      // دریافت ویدئو از سرور اصلی
       const headers = {}
 
       if (req.headers.range) {
@@ -160,6 +181,7 @@ p { color: #aaa; }
           upstream.body.destroy()
         }
       })
+
     } catch (error) {
       console.error("Stream error:", error)
 
@@ -181,13 +203,13 @@ export function registerCommands(bot) {
 
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "سلام! به HamoStream خوش آمدی 🎬\n\nلینک مستقیم ویدئوی HTTPS را بفرست تا لینک پخش آنلاین ساخته شود."
+      "سلام! به HamoStream خوش آمدی 🎬\n\nلینک مستقیم ویدئو یا لینک دانلود پشتیبانی‌شده Linkulu را بفرست تا لینک پخش آنلاین ساخته شود."
     )
   })
 
   bot.command("help", async (ctx) => {
     await ctx.reply(
-      "راهنما:\n\nلینک مستقیم HTTPS با پسوند MP4، MOV، M4V یا WEBM بفرست.\nربات لینک پخش آنلاین می‌سازد."
+      "راهنما:\n\nلینک مستقیم HTTPS ویدئو با پسوند MP4، MOV، M4V یا WEBM بفرست.\nهمچنین لینک دانلود Linkulu با فرمت /dl/ را می‌پذیرم.\nربات لینک پخش آنلاین می‌سازد."
     )
   })
 
@@ -200,7 +222,7 @@ export function registerCommands(bot) {
 
     if (!isValidVideoUrl(text)) {
       await ctx.reply(
-        "لطفاً لینک مستقیم HTTPS ویدئو با پسوند MP4، MOV، M4V یا WEBM بفرست."
+        "لطفاً لینک مستقیم HTTPS ویدئو یا لینک دانلود معتبر Linkulu بفرست."
       )
       return
     }

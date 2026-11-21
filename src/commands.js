@@ -1,205 +1,227 @@
-import { InputFile } from "grammy"
-import { pipeline } from "node:stream/promises"
-import { createWriteStream, createReadStream } from "node:fs"
-import { mkdtemp, rm, stat } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import path from "node:path"
+import { createServer } from "node:http"
+import { randomUUID } from "node:crypto"
 import { request } from "undici"
 
-const MAX_FILE_SIZE = 45 * 1024 * 1024
-const MAX_DOWNLOAD_TIME = 5 * 60 * 1000
+const PUBLIC_URL =
+  process.env.PUBLIC_URL || "https://hamodownloader.fadehost.app"
 
-function identifyLink(url) {
-  const host = url.hostname.toLowerCase().replace(/^www\./, "")
+const videos = new Map()
 
-  if (["youtube.com", "m.youtube.com", "youtu.be"].includes(host)) {
-    return "youtube"
+function isValidVideoUrl(value) {
+  try {
+    const url = new URL(value)
+    const host = url.hostname.toLowerCase()
+
+    if (url.protocol !== "https:") return false
+    if (url.username || url.password) return false
+
+    if (
+      host === "localhost" ||
+      host.endsWith(".localhost") ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      host.startsWith("169.254.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    ) return false
+
+    return /\.(mp4|m4v|mov|webm)$/i.test(url.pathname)
+  } catch {
+    return false
   }
-
-  if (host === "instagram.com") {
-    return "instagram"
-  }
-
-  return "direct"
 }
 
-async function getPageInfo(url) {
-  try {
-    const response = await request(url, {
-      method: "GET",
-      headersTimeout: 10000,
-      bodyTimeout: 10000,
-      headers: {
-        "user-agent": "Mozilla/5.0"
+function startWebServer() {
+  const server = createServer(async (req, res) => {
+    try {
+      const pathname = new URL(
+        req.url,
+        "http://localhost"
+      ).pathname
+
+      const match = pathname.match(/^\/(watch|stream)\/([a-f0-9-]+)$/)
+
+      if (!match) {
+        res.writeHead(404)
+        res.end("Not found")
+        return
       }
-    })
 
-    const chunks = []
-    let size = 0
+      const [, action, id] = match
+      const item = videos.get(id)
 
-    for await (const chunk of response.body) {
-      size += chunk.length
-      if (size > 500000) break
-      chunks.push(chunk)
+      if (!item || item.expires < Date.now()) {
+        videos.delete(id)
+        res.writeHead(404)
+        res.end("Link expired")
+        return
+      }
+
+      if (action === "watch") {
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store"
+        })
+
+        res.end(`<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HamoStream</title>
+<style>
+body {
+  margin: 0;
+  background: #111;
+  color: white;
+  font-family: sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+h2 { color: #00d4aa; }
+video {
+  width: 95%;
+  max-width: 900px;
+  border-radius: 12px;
+  background: black;
+}
+p { color: #aaa; }
+</style>
+</head>
+<body>
+<h2>HamoStream 🎬</h2>
+<video controls playsinline preload="metadata">
+<source src="/stream/${id}" type="video/mp4">
+مرورگر شما از پخش ویدئو پشتیبانی نمی‌کند.
+</video>
+<p>پخش آنلاین توسط HamoStream</p>
+</body>
+</html>`)
+        return
+      }
+
+      const headers = {}
+
+      if (req.headers.range) {
+        headers.range = req.headers.range
+      }
+
+      const upstream = await request(item.url, {
+        method: req.method === "HEAD" ? "HEAD" : "GET",
+        headers,
+        headersTimeout: 20000,
+        bodyTimeout: 0,
+        maxRedirections: 0
+      })
+
+      if (![200, 206, 304, 416].includes(upstream.statusCode)) {
+        upstream.body.destroy()
+        res.writeHead(502)
+        res.end("Video source unavailable")
+        return
+      }
+
+      const responseHeaders = {
+        "Content-Type":
+          upstream.headers["content-type"] || "video/mp4",
+        "Accept-Ranges":
+          upstream.headers["accept-ranges"] || "bytes",
+        "Cache-Control": "no-store"
+      }
+
+      for (const name of [
+        "content-length",
+        "content-range",
+        "last-modified",
+        "etag"
+      ]) {
+        if (upstream.headers[name]) {
+          responseHeaders[name] = upstream.headers[name]
+        }
+      }
+
+      res.writeHead(upstream.statusCode, responseHeaders)
+
+      if (req.method === "HEAD" || upstream.statusCode === 304) {
+        upstream.body.destroy()
+        res.end()
+        return
+      }
+
+      upstream.body.pipe(res)
+
+      req.on("close", () => {
+        if (!res.writableEnded) {
+          upstream.body.destroy()
+        }
+      })
+    } catch (error) {
+      console.error("Stream error:", error)
+
+      if (!res.headersSent) {
+        res.writeHead(502)
+      }
+
+      res.end("Streaming error")
     }
+  })
 
-    const html = Buffer.concat(chunks).toString("utf8")
-    const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-
-    return match
-      ? match[1].replace(/&amp;/g, "&").replace(/&#39;/g, "'").trim()
-      : null
-  } catch {
-    return null
-  }
+  server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
+    console.log("[web] HamoStream server started")
+  })
 }
 
 export function registerCommands(bot) {
+  startWebServer()
+
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "سلام به HamoDownloader 🎬\n\nلینک یوتیوب، اینستاگرام یا لینک مستقیم MP4 بفرست."
+      "سلام! به HamoStream خوش آمدی 🎬\n\nلینک مستقیم ویدئوی HTTPS را بفرست تا لینک پخش آنلاین ساخته شود."
     )
   })
 
   bot.command("help", async (ctx) => {
     await ctx.reply(
-      "راهنما:\n\nلینک یوتیوب و اینستاگرام شناسایی می‌شود.\nلینک مستقیم MP4، MOV، M4V و WEBM قابل دریافت است.\nحداکثر حجم فایل مستقیم: ۴۵ مگابایت."
+      "راهنما:\n\nلینک مستقیم HTTPS با پسوند MP4، MOV، M4V یا WEBM بفرست.\nربات لینک پخش آنلاین می‌سازد."
     )
   })
 
   bot.command("ping", async (ctx) => {
-    await ctx.reply("ربات فعاله ✅")
+    await ctx.reply("HamoStream فعاله ✅")
   })
 
   bot.on("message:text", async (ctx) => {
-    let url
+    const text = ctx.message.text.trim()
 
-    try {
-      url = new URL(ctx.message.text.trim())
-    } catch {
-      await ctx.reply("لطفاً لینک معتبر بفرست.")
-      return
-    }
-
-    if (url.protocol !== "https:") {
-      await ctx.reply("فقط لینک HTTPS پذیرفته می‌شود.")
-      return
-    }
-
-    const type = identifyLink(url)
-
-    if (type !== "direct") {
-      const status = await ctx.reply("در حال بررسی لینک... ⏳")
-      const title = await getPageInfo(url)
-
-      let message
-
-      if (type === "youtube") {
-        message = "لینک یوتیوب شناسایی شد ✅"
-      } else {
-        message = "لینک اینستاگرام شناسایی شد ✅"
-      }
-
-      if (title) {
-        message += `\n\nعنوان: ${title}`
-      }
-
-      message +=
-        "\n\nبرای دریافت فایل، باید از روش رسمی و دارای مجوز استفاده شود. دانلود خودکار این پلتفرم هنوز فعال نیست."
-
-      await ctx.api.editMessageText(
-        ctx.chat.id,
-        status.message_id,
-        message
-      ).catch(() => {})
-
-      return
-    }
-
-    if (!/\.(mp4|mov|m4v|webm)$/i.test(url.pathname)) {
-      await ctx.reply("این لینک مستقیم فایل ویدئویی نیست.")
-      return
-    }
-
-    const status = await ctx.reply("در حال دریافت ویدئو... ⏳")
-    let folder
-
-    try {
-      folder = await mkdtemp(path.join(tmpdir(), "hamo-"))
-      const file = path.join(folder, "video.mp4")
-      const controller = new AbortController()
-
-      const timer = setTimeout(
-        () => controller.abort(),
-        MAX_DOWNLOAD_TIME
+    if (!isValidVideoUrl(text)) {
+      await ctx.reply(
+        "لطفاً لینک مستقیم HTTPS ویدئو با پسوند MP4، MOV، M4V یا WEBM بفرست."
       )
+      return
+    }
 
-      try {
-        const response = await request(url, {
-          method: "GET",
-          signal: controller.signal,
-          headersTimeout: 15000,
-          bodyTimeout: 30000
-        })
+    const id = randomUUID()
 
-        if (response.statusCode !== 200) {
-          response.body.destroy()
-          throw new Error("DOWNLOAD_FAILED")
-        }
+    videos.set(id, {
+      url: text,
+      expires: Date.now() + 6 * 60 * 60 * 1000
+    })
 
-        const length = Number(
-          response.headers["content-length"] || 0
-        )
-
-        if (length > MAX_FILE_SIZE) {
-          response.body.destroy()
-          throw new Error("FILE_TOO_LARGE")
-        }
-
-        await pipeline(
-          response.body,
-          createWriteStream(file),
-          { signal: controller.signal }
-        )
-      } finally {
-        clearTimeout(timer)
-      }
-
-      const info = await stat(file)
-
-      if (info.size === 0 || info.size > MAX_FILE_SIZE) {
-        throw new Error("FILE_TOO_LARGE")
-      }
-
-      await ctx.replyWithVideo(
-        new InputFile(createReadStream(file), "video.mp4"),
-        { caption: "ارسال توسط HamoDownloader 🎬" }
-      )
-
-      await ctx.api.deleteMessage(
-        ctx.chat.id,
-        status.message_id
-      ).catch(() => {})
-    } catch (error) {
-      console.error("Download error:", error)
-
-      const message =
-        error.message === "FILE_TOO_LARGE"
-          ? "حجم ویدئو بیشتر از ۴۵ مگابایت است."
-          : "دریافت ویدئو ناموفق بود."
-
-      await ctx.api.editMessageText(
-        ctx.chat.id,
-        status.message_id,
-        message
-      ).catch(() => {})
-    } finally {
-      if (folder) {
-        await rm(folder, {
-          recursive: true,
-          force: true
-        }).catch(() => {})
+    for (const [key, value] of videos) {
+      if (value.expires < Date.now()) {
+        videos.delete(key)
       }
     }
+
+    const watchUrl = `${PUBLIC_URL}/watch/${id}`
+
+    await ctx.reply(
+      `لینک پخش آنلاین آماده شد 🎬\n\n${watchUrl}\n\nاین لینک تا ۶ ساعت معتبر است.`
+    )
   })
 }

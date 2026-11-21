@@ -1,3 +1,4 @@
+import { InputFile } from "grammy"
 import { pipeline } from "node:stream/promises"
 import { createWriteStream, createReadStream } from "node:fs"
 import { mkdtemp, rm, stat } from "node:fs/promises"
@@ -84,8 +85,9 @@ export function registerCommands(bot) {
       }
 
       await ctx.replyWithVideo(
-        createReadStream(file),
-        { caption: "ارسال توسط HamoDownloader 🎬" }
+  new InputFile(createReadStream(file), "video.mp4"),
+  { caption: "ارسال توسط HamoDownloader 🎬" }
+)
       )
 
       await ctx.api.deleteMessage(ctx.chat.id, status.message_id)

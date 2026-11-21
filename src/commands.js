@@ -1,4 +1,4 @@
-import { Bot, InputFile } from "grammy"
+import { InputFile } from "grammy"
 import { pipeline } from "node:stream/promises"
 import { createWriteStream, createReadStream } from "node:fs"
 import { mkdtemp, rm, stat } from "node:fs/promises"
@@ -12,13 +12,13 @@ const MAX_DOWNLOAD_TIME = 5 * 60 * 1000
 export function registerCommands(bot) {
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "سلام! به HamoDownloader خوش اومدی 🎬\n\nلینک مستقیم ویدئو با پسوند MP4، MOV، M4V یا WEBM بفرست."
+      "سلام به HamoDownloader 🎬\n\nلینک ویدئو بفرست:\n\nپشتیبانی از لینک مستقیم و تشخیص لینک یوتیوب و اینستاگرام."
     )
   })
 
   bot.command("help", async (ctx) => {
     await ctx.reply(
-      "راهنما 🎬\n\nیک لینک مستقیم HTTPS به فایل ویدئویی بفرست.\nحداکثر حجم قابل دریافت: ۴۵ مگابایت."
+      "راهنما:\n\nلینک مستقیم MP4، MOV، M4V یا WEBM برای دریافت ویدئو بفرست.\n\nلینک YouTube و Instagram هم شناسایی می‌شود.\n\nحداکثر حجم فایل مستقیم: ۴۵ مگابایت."
     )
   })
 
@@ -27,12 +27,14 @@ export function registerCommands(bot) {
   })
 
   bot.on("message:text", async (ctx) => {
+    const text = ctx.message.text.trim()
+
     let url
 
     try {
-      url = new URL(ctx.message.text.trim())
+      url = new URL(text)
     } catch {
-      await ctx.reply("لینک معتبر نیست.")
+      await ctx.reply("لطفاً یک لینک معتبر بفرست.")
       return
     }
 
@@ -41,10 +43,22 @@ export function registerCommands(bot) {
       return
     }
 
-    if (!/\.(mp4|mov|m4v|webm)$/i.test(url.pathname)) {
+    const host = url.hostname.toLowerCase().replace(/^www\./, "")
+
+    if (
+      host === "youtube.com" ||
+      host === "m.youtube.com" ||
+      host === "youtu.be" ||
+      host === "instagram.com"
+    ) {
       await ctx.reply(
-        "فعلاً فقط لینک مستقیم فایل ویدئویی پشتیبانی می‌شود."
+        "لینک شناسایی شد ✅\n\nاین سایت شناسایی شده، اما دریافت خودکار ویدئو از آن هنوز فعال نیست.\n\nاگر لینک مستقیم فایل ویدئو را داری، آن را ارسال کن."
       )
+      return
+    }
+
+    if (!/\.(mp4|mov|m4v|webm)$/i.test(url.pathname)) {
+      await ctx.reply("این لینک مستقیم فایل ویدئویی نیست.")
       return
     }
 
@@ -54,11 +68,12 @@ export function registerCommands(bot) {
     try {
       folder = await mkdtemp(path.join(tmpdir(), "hamo-"))
       const file = path.join(folder, "video.mp4")
-
       const controller = new AbortController()
-      const timer = setTimeout(() => {
-        controller.abort()
-      }, MAX_DOWNLOAD_TIME)
+
+      const timer = setTimeout(
+        () => controller.abort(),
+        MAX_DOWNLOAD_TIME
+      )
 
       try {
         const response = await request(url, {
@@ -70,7 +85,7 @@ export function registerCommands(bot) {
 
         if (response.statusCode !== 200) {
           response.body.destroy()
-          throw new Error(`HTTP_${response.statusCode}`)
+          throw new Error("DOWNLOAD_FAILED")
         }
 
         const length = Number(
@@ -103,9 +118,7 @@ export function registerCommands(bot) {
 
       await ctx.replyWithVideo(
         new InputFile(createReadStream(file), "video.mp4"),
-        {
-          caption: "ارسال توسط HamoDownloader 🎬"
-        }
+        { caption: "ارسال توسط HamoDownloader 🎬" }
       )
 
       await ctx.api.deleteMessage(
@@ -115,12 +128,12 @@ export function registerCommands(bot) {
     } catch (error) {
       console.error("Download error:", error)
 
-      let message = "دریافت یا ارسال ویدئو ناموفق بود."
+      let message = "دریافت ویدئو ناموفق بود."
 
       if (error.message === "FILE_TOO_LARGE") {
-        message = "حجم فایل بیشتر از حد مجاز ۴۵ مگابایت است."
+        message = "حجم ویدئو بیشتر از ۴۵ مگابایت است."
       } else if (error.name === "AbortError") {
-        message = "زمان دریافت ویدئو تمام شد. دوباره امتحان کن."
+        message = "زمان دریافت ویدئو تمام شد."
       }
 
       await ctx.api.editMessageText(

@@ -1,11 +1,11 @@
-
 import { createServer } from "node:http"
 import { randomUUID } from "node:crypto"
 import { request } from "undici"
 import { InlineKeyboard } from "grammy"
+import QRCode from "qrcode"
+import { PDFDocument, StandardFonts } from "pdf-lib"
 
-const PUBLIC_URL =
-  process.env.PUBLIC_URL || "https://hamodownloader.fadehost.app"
+const PUBLIC_URL = process.env.PUBLIC_URL || "https://hamodownloader.fadehost.app"
 
 const AI_API_URL = process.env.AI_API_URL
 const AI_API_KEY = process.env.AI_API_KEY
@@ -18,22 +18,28 @@ const conversations = new Map()
 const MAX_HISTORY = 20
 
 const MENU_TEXT = `
-🤖 به Hamo AI خوش آمدی!
+🤖 به HamoBot خوش آمدی!
 
-دستیار هوشمند و جعبه‌ابزار شما.
+جعبه‌ابزار هوشمند و چندمنظوره شما.
 
-از منوی زیر یک بخش را انتخاب کن:
+از منوی زیر یک قابلیت را انتخاب کن:
 `
 
 function mainMenu() {
   return new InlineKeyboard()
-    .text("🧠 گفت‌وگو با Hamo AI", "ai_chat")
-    .row()
+    .text("🧠 هوش مصنوعی", "ai_chat")
     .text("🌐 مترجم", "ai_translate")
+    .row()
     .text("✍️ نویسنده متن", "ai_writer")
+    .text("🎬 HamoStream", "stream_mode")
+    .row()
+    .text("🔳 ساخت QR Code", "qr")
+    .text("📄 ابزار PDF", "pdf")
+    .row()
+    .text("🔤 ابزار متن", "text_tools")
+    .text("🎮 سرگرمی", "games")
     .row()
     .text("⚙️ تنظیمات", "settings")
-    .text("🎬 HamoStream", "stream_mode")
 }
 
 function backMenu() {
@@ -44,13 +50,6 @@ function chatMenu() {
   return new InlineKeyboard()
     .text("🔄 گفت‌وگوی جدید", "new_chat")
     .row()
-    .text("🗑 پاک‌کردن تاریخچه", "clear_chat")
-    .row()
-    .text("🏠 منوی اصلی", "home")
-}
-
-function settingsMenu() {
-  return new InlineKeyboard()
     .text("🗑 پاک‌کردن تاریخچه", "clear_chat")
     .row()
     .text("🏠 منوی اصلی", "home")
@@ -73,7 +72,7 @@ async function askAI(history) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${AI_API_KEY}`
+        Authorization: `Bearer ${AI_API_KEY}`
       },
       body: JSON.stringify({
         model: AI_MODEL,
@@ -86,15 +85,15 @@ async function askAI(history) {
 
     if (!response.ok) {
       console.error("[AI error]", response.status, data)
-      return "ارتباط با هوش مصنوعی برقرار نشد. کمی بعد دوباره تلاش کن."
+      return "ارتباط با هوش مصنوعی برقرار نشد."
     }
 
     return data.choices?.[0]?.message?.content ||
-      "پاسخی از هوش مصنوعی دریافت نشد."
+      "پاسخی دریافت نشد."
 
   } catch (error) {
     console.error("[AI connection error]", error)
-    return "خطا در اتصال به سرویس هوش مصنوعی."
+    return "خطا در اتصال به هوش مصنوعی."
   }
 }
 
@@ -131,18 +130,11 @@ function isValidVideoUrl(value) {
   }
 }
 
-// HamoStream server
 function startWebServer() {
   const server = createServer(async (req, res) => {
     try {
-      const pathname = new URL(
-        req.url,
-        "http://localhost"
-      ).pathname
-
-      const match = pathname.match(
-        /^\/(watch|stream)\/([a-f0-9-]+)$/
-      )
+      const pathname = new URL(req.url, "http://localhost").pathname
+      const match = pathname.match(/^\/(watch|stream)\/([a-f0-9-]+)$/)
 
       if (!match) {
         res.writeHead(404)
@@ -196,23 +188,24 @@ p { color: #aaa; }
 </head>
 <body>
 <h2>HamoStream 🎬</h2>
-<video src="/stream/${id}" controls playsinline preload="metadata">
-مرورگر شما از پخش ویدئو پشتیبانی نمی‌کند.
-</video>
+<video src="/stream/${id}" controls playsinline preload="metadata"></video>
 <p>پخش آنلاین توسط HamoStream</p>
 </body>
 </html>`)
         return
       }
 
-      const headers = {}
-
-      if (req.headers.range) {
-        headers.range = req.headers.range
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405)
+        res.end()
+        return
       }
 
+      const headers = {}
+      if (req.headers.range) headers.range = req.headers.range
+
       const upstream = await request(item.url, {
-        method: req.method === "HEAD" ? "HEAD" : "GET",
+        method: req.method,
         headers,
         headersTimeout: 20000,
         bodyTimeout: 0,
@@ -227,19 +220,12 @@ p { color: #aaa; }
       }
 
       const responseHeaders = {
-        "Content-Type":
-          upstream.headers["content-type"] || "video/mp4",
-        "Accept-Ranges":
-          upstream.headers["accept-ranges"] || "bytes",
+        "Content-Type": upstream.headers["content-type"] || "video/mp4",
+        "Accept-Ranges": upstream.headers["accept-ranges"] || "bytes",
         "Cache-Control": "no-store"
       }
 
-      for (const name of [
-        "content-length",
-        "content-range",
-        "last-modified",
-        "etag"
-      ]) {
+      for (const name of ["content-length", "content-range", "last-modified", "etag"]) {
         if (upstream.headers[name]) {
           responseHeaders[name] = upstream.headers[name]
         }
@@ -256,18 +242,12 @@ p { color: #aaa; }
       upstream.body.pipe(res)
 
       req.on("close", () => {
-        if (!res.writableEnded) {
-          upstream.body.destroy()
-        }
+        if (!res.writableEnded) upstream.body.destroy()
       })
 
     } catch (error) {
-      console.error("Stream error:", error)
-
-      if (!res.headersSent) {
-        res.writeHead(502)
-      }
-
+      console.error("[Stream error]", error)
+      if (!res.headersSent) res.writeHead(502)
       res.end("Streaming error")
     }
   })
@@ -277,34 +257,48 @@ p { color: #aaa; }
   })
 }
 
+async function createPdf(text) {
+  const pdf = await PDFDocument.create()
+  const page = pdf.addPage([595, 842])
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+  const safeText = text.replace(/[^\x20-\x7E\n]/g, "?").slice(0, 3000)
+
+  page.drawText(safeText, {
+    x: 45,
+    y: 790,
+    size: 12,
+    font,
+    maxWidth: 505,
+    lineHeight: 18
+  })
+
+  return await pdf.save()
+}
+
 export function registerCommands(bot) {
   startWebServer()
 
   bot.command("start", async (ctx) => {
     userModes.delete(ctx.from.id)
-    await ctx.reply(MENU_TEXT, {
-      reply_markup: mainMenu()
-    })
+    await ctx.reply(MENU_TEXT, { reply_markup: mainMenu() })
   })
 
   bot.command("menu", async (ctx) => {
     userModes.delete(ctx.from.id)
-    await ctx.reply(MENU_TEXT, {
-      reply_markup: mainMenu()
-    })
+    await ctx.reply(MENU_TEXT, { reply_markup: mainMenu() })
   })
 
   bot.command("help", async (ctx) => {
     await ctx.reply(
-      "راهنمای Hamo AI\n\n" +
+      "راهنمای HamoBot\n\n" +
       "/start - شروع\n" +
       "/menu - منوی اصلی\n" +
-      "/ping - بررسی وضعیت ربات"
+      "/ping - بررسی وضعیت"
     )
   })
 
   bot.command("ping", async (ctx) => {
-    await ctx.reply("Hamo AI و HamoStream فعال هستند ✅")
+    await ctx.reply("HamoBot فعال است ✅")
   })
 
   bot.on("callback_query:data", async (ctx) => {
@@ -324,8 +318,7 @@ export function registerCommands(bot) {
     if (data === "ai_chat") {
       userModes.set(userId, "ai")
       await ctx.editMessageText(
-        "🧠 گفت‌وگو با Hamo AI\n\n" +
-        "پیامت را ارسال کن.",
+        "🧠 گفت‌وگو با Hamo AI\n\nپیامت را ارسال کن.",
         { reply_markup: chatMenu() }
       )
       return
@@ -335,8 +328,7 @@ export function registerCommands(bot) {
       conversations.set(userId, [])
       userModes.set(userId, "ai")
       await ctx.editMessageText(
-        "🔄 گفت‌وگوی جدید شروع شد!\n\n" +
-        "پیامت را ارسال کن.",
+        "🔄 گفت‌وگوی جدید شروع شد!\n\nپیامت را بفرست.",
         { reply_markup: chatMenu() }
       )
       return
@@ -346,7 +338,7 @@ export function registerCommands(bot) {
       conversations.set(userId, [])
       userModes.set(userId, "ai")
       await ctx.editMessageText(
-        "🗑 تاریخچه گفت‌وگو پاک شد.",
+        "🗑 تاریخچه پاک شد.",
         { reply_markup: chatMenu() }
       )
       return
@@ -355,9 +347,44 @@ export function registerCommands(bot) {
     if (data === "settings") {
       userModes.delete(userId)
       await ctx.editMessageText(
-        "⚙️ تنظیمات Hamo AI\n\n" +
-        "از این قسمت می‌توانی تاریخچه گفت‌وگو را پاک کنی.",
-        { reply_markup: settingsMenu() }
+        "⚙️ تنظیمات HamoBot\n\nمدیریت تاریخچه گفت‌وگو.",
+        { reply_markup: chatMenu() }
+      )
+      return
+    }
+
+    if (data === "qr") {
+      userModes.set(userId, "qr")
+      await ctx.editMessageText(
+        "🔳 ساخت QR Code\n\nمتن یا لینک موردنظرت را ارسال کن.",
+        { reply_markup: backMenu() }
+      )
+      return
+    }
+
+    if (data === "pdf") {
+      userModes.set(userId, "pdf")
+      await ctx.editMessageText(
+        "📄 ساخت PDF\n\nمتن موردنظرت را ارسال کن تا فایل PDF بسازم.",
+        { reply_markup: backMenu() }
+      )
+      return
+    }
+
+    if (data === "text_tools") {
+      userModes.set(userId, "text_tools")
+      await ctx.editMessageText(
+        "🔤 ابزار متن\n\nمتنت را بفرست تا تعداد کلمات و حروف آن را محاسبه کنم.",
+        { reply_markup: backMenu() }
+      )
+      return
+    }
+
+    if (data === "games") {
+      userModes.set(userId, "games")
+      await ctx.editMessageText(
+        "🎮 بازی حدس عدد\n\nیک عدد بین ۱ تا ۱۰ حدس بزن!",
+        { reply_markup: backMenu() }
       )
       return
     }
@@ -369,11 +396,11 @@ export function registerCommands(bot) {
       },
       ai_writer: {
         mode: "writer",
-        text: "✍️ نویسنده Hamo\n\nدرخواست نوشتن یا ویرایش متن را ارسال کن."
+        text: "✍️ نویسنده Hamo\n\nدرخواست نوشتن یا ویرایش متن را بفرست."
       },
       stream_mode: {
         mode: "stream",
-        text: "🎬 HamoStream\n\nلینک مستقیم ویدئو یا لینک دانلود پشتیبانی‌شده Linkulu را بفرست."
+        text: "🎬 HamoStream\n\nلینک مستقیم HTTPS ویدئو را بفرست."
       }
     }
 
@@ -389,6 +416,73 @@ export function registerCommands(bot) {
   bot.on("message:text", async (ctx) => {
     const messageText = ctx.message.text.trim()
     const userId = ctx.from.id
+    const mode = userModes.get(userId)
+
+    if (mode === "qr") {
+      try {
+        const qr = await QRCode.toBuffer(messageText, {
+          type: "png",
+          width: 500,
+          margin: 2
+        })
+
+        await ctx.replyWithPhoto(
+          new Blob([qr], { type: "image/png" }),
+          { caption: "🔳 QR Code شما آماده شد." }
+        )
+      } catch (error) {
+        console.error(error)
+        await ctx.reply("خطا در ساخت QR Code.")
+      }
+      return
+    }
+
+    if (mode === "pdf") {
+      try {
+        const pdf = await createPdf(messageText)
+        await ctx.replyWithDocument(
+          new Blob([pdf], { type: "application/pdf" }),
+          { caption: "📄 فایل PDF ساخته شد." }
+        )
+      } catch (error) {
+        console.error(error)
+        await ctx.reply("خطا در ساخت PDF.")
+      }
+      return
+    }
+
+    if (mode === "text_tools") {
+      const chars = [...messageText].length
+      const words = messageText.trim().split(/\s+/).filter(Boolean).length
+
+      await ctx.reply(
+        `🔤 نتیجه بررسی متن\n\n` +
+        `تعداد کاراکتر: ${chars}\n` +
+        `تعداد کلمات: ${words}\n` +
+        `تعداد خطوط: ${messageText.split("\n").length}`,
+        { reply_markup: backMenu() }
+      )
+      return
+    }
+
+    if (mode === "games") {
+      const guess = Number(messageText)
+
+      if (!Number.isInteger(guess) || guess < 1 || guess > 10) {
+        await ctx.reply("لطفاً یک عدد صحیح بین ۱ تا ۱۰ بفرست.")
+        return
+      }
+
+      const answer = Math.floor(Math.random() * 10) + 1
+
+      await ctx.reply(
+        guess === answer
+          ? "🎉 آفرین! درست حدس زدی."
+          : `این بار نشد! عدد من ${answer} بود.`,
+        { reply_markup: backMenu() }
+      )
+      return
+    }
 
     if (isValidVideoUrl(messageText)) {
       const id = randomUUID()
@@ -398,29 +492,18 @@ export function registerCommands(bot) {
         expires: Date.now() + 7 * 24 * 60 * 60 * 1000
       })
 
-      for (const [key, value] of videos) {
-        if (value.expires < Date.now()) {
-          videos.delete(key)
-        }
-      }
-
       const watchUrl = `${PUBLIC_URL}/watch/${id}`
 
       await ctx.reply(
-        `لینک پخش آنلاین آماده شد 🎬\n\n${watchUrl}\n\nاین لینک تا ۷ روز معتبر است.`
+        `لینک پخش آنلاین آماده شد 🎬\n\n${watchUrl}\n\nاعتبار: ۷ روز`
       )
       return
     }
 
-    const mode = userModes.get(userId)
-
     if (mode === "ai") {
       const history = getHistory(userId)
 
-      history.push({
-        role: "user",
-        content: messageText
-      })
+      history.push({ role: "user", content: messageText })
 
       if (history.length > MAX_HISTORY) {
         history.splice(0, history.length - MAX_HISTORY)
@@ -430,53 +513,32 @@ export function registerCommands(bot) {
 
       const answer = await askAI(history)
 
-      history.push({
-        role: "assistant",
-        content: answer
-      })
+      history.push({ role: "assistant", content: answer })
 
       if (history.length > MAX_HISTORY) {
         history.splice(0, history.length - MAX_HISTORY)
       }
 
-      await ctx.reply(answer, {
-        reply_markup: chatMenu()
-      })
+      await ctx.reply(answer, { reply_markup: chatMenu() })
       return
     }
 
-    if (mode === "translate") {
-      userModes.set(userId, "ai")
-      const answer = await askAI([
-        {
-          role: "user",
-          content: `این متن را ترجمه کن. زبان مقصد را از متن درخواست تشخیص بده و اگر مشخص نیست به فارسی ترجمه کن:\n\n${messageText}`
-        }
-      ])
-      await ctx.reply(answer, {
-        reply_markup: backMenu()
-      })
-      userModes.set(userId, "translate")
-      return
-    }
+    if (mode === "translate" || mode === "writer") {
+      const prompt = mode === "translate"
+        ? `این متن را ترجمه کن. اگر زبان مقصد مشخص نیست به فارسی ترجمه کن:\n\n${messageText}`
+        : `این درخواست نویسندگی را انجام بده:\n\n${messageText}`
 
-    if (mode === "writer") {
       const answer = await askAI([
-        {
-          role: "user",
-          content: `به عنوان دستیار نویسندگی، این درخواست را انجام بده:\n\n${messageText}`
-        }
+        { role: "user", content: prompt }
       ])
-      await ctx.reply(answer, {
-        reply_markup: backMenu()
-      })
+
+      await ctx.reply(answer, { reply_markup: backMenu() })
       return
     }
 
     if (mode === "stream") {
       await ctx.reply(
-        "این لینک قابل قبول نیست.\n\n" +
-        "لطفاً لینک مستقیم HTTPS ویدئو یا لینک دانلود معتبر Linkulu بفرست."
+        "این لینک معتبر نیست. لطفاً لینک مستقیم HTTPS ویدئو را ارسال کن."
       )
       return
     }

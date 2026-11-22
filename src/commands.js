@@ -9,6 +9,9 @@ const PUBLIC_URL =
 
 const videos = new Map()
 const userModes = new Map()
+const conversations = new Map()
+
+const MAX_HISTORY = 20
 
 const MENU_TEXT = `
 🤖 به Hamo AI خوش آمدی!
@@ -25,12 +28,37 @@ function mainMenu() {
     .text("🌐 مترجم", "ai_translate")
     .text("✍️ نویسنده متن", "ai_writer")
     .row()
+    .text("⚙️ تنظیمات", "settings")
     .text("🎬 HamoStream", "stream_mode")
 }
 
 function backMenu() {
   return new InlineKeyboard()
     .text("🏠 منوی اصلی", "home")
+}
+
+function chatMenu() {
+  return new InlineKeyboard()
+    .text("🔄 گفت‌وگوی جدید", "new_chat")
+    .row()
+    .text("🗑 پاک‌کردن تاریخچه", "clear_chat")
+    .row()
+    .text("🏠 منوی اصلی", "home")
+}
+
+function settingsMenu() {
+  return new InlineKeyboard()
+    .text("🗑 پاک‌کردن تاریخچه", "clear_chat")
+    .row()
+    .text("🏠 منوی اصلی", "home")
+}
+
+function getHistory(userId) {
+  if (!conversations.has(userId)) {
+    conversations.set(userId, [])
+  }
+
+  return conversations.get(userId)
 }
 
 function isValidVideoUrl(value) {
@@ -221,7 +249,6 @@ p { color: #aaa; }
 export function registerCommands(bot) {
   startWebServer()
 
-  // Start
   bot.command("start", async (ctx) => {
     userModes.delete(ctx.from.id)
 
@@ -230,7 +257,6 @@ export function registerCommands(bot) {
     })
   })
 
-  // Main menu
   bot.command("menu", async (ctx) => {
     userModes.delete(ctx.from.id)
 
@@ -239,23 +265,19 @@ export function registerCommands(bot) {
     })
   })
 
-  // Help
   bot.command("help", async (ctx) => {
     await ctx.reply(
       "راهنمای Hamo AI\n\n" +
       "/start - شروع\n" +
       "/menu - منوی اصلی\n" +
-      "/ping - بررسی وضعیت ربات\n\n" +
-      "برای پخش ویدئو، لینک مستقیم یا لینک پشتیبانی‌شده Linkulu بفرست."
+      "/ping - بررسی وضعیت ربات"
     )
   })
 
-  // Ping
   bot.command("ping", async (ctx) => {
     await ctx.reply("Hamo AI و HamoStream فعال هستند ✅")
   })
 
-  // Menu buttons
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data
     const userId = ctx.from.id
@@ -271,29 +293,69 @@ export function registerCommands(bot) {
       return
     }
 
-    const sections = {
-      ai_chat: {
-        mode: "ai",
-        text:
-          "🧠 گفت‌وگو با Hamo AI\n\n" +
-          "بخش گفت‌وگو انتخاب شد.\n" +
-          "اتصال مدل هوش مصنوعی هنوز فعال نشده و در مرحله بعد اضافه می‌شود."
-      },
+    if (data === "ai_chat") {
+      userModes.set(userId, "ai")
 
+      await ctx.editMessageText(
+        "🧠 گفت‌وگو با Hamo AI\n\n" +
+        "حافظه گفت‌وگو برای تو فعال است.\n" +
+        "پیامت را ارسال کن.\n\n" +
+        "اتصال مدل هوش مصنوعی هنوز انجام نشده است.",
+        { reply_markup: chatMenu() }
+      )
+      return
+    }
+
+    if (data === "new_chat") {
+      conversations.set(userId, [])
+      userModes.set(userId, "ai")
+
+      await ctx.editMessageText(
+        "🔄 گفت‌وگوی جدید شروع شد!\n\n" +
+        "حافظه گفت‌وگوی قبلی پاک شد.\n" +
+        "پیامت را ارسال کن.",
+        { reply_markup: chatMenu() }
+      )
+      return
+    }
+
+    if (data === "clear_chat") {
+      conversations.set(userId, [])
+      userModes.set(userId, "ai")
+
+      await ctx.editMessageText(
+        "🗑 تاریخچه گفت‌وگو پاک شد.",
+        { reply_markup: chatMenu() }
+      )
+      return
+    }
+
+    if (data === "settings") {
+      userModes.delete(userId)
+
+      await ctx.editMessageText(
+        "⚙️ تنظیمات Hamo AI\n\n" +
+        "از این قسمت می‌توانی تاریخچه گفت‌وگو را پاک کنی.",
+        { reply_markup: settingsMenu() }
+      )
+      return
+    }
+
+    const sections = {
       ai_translate: {
         mode: "translate",
         text:
           "🌐 مترجم Hamo\n\n" +
-          "بخش ترجمه انتخاب شد.\n" +
-          "برای فعال‌شدن ترجمه هوشمند، اتصال سرویس AI لازم است."
+          "متنت را ارسال کن.\n" +
+          "اتصال سرویس ترجمه هنوز فعال نشده است."
       },
 
       ai_writer: {
         mode: "writer",
         text:
           "✍️ نویسنده Hamo\n\n" +
-          "بخش نویسندگی انتخاب شد.\n" +
-          "برای فعال‌شدن تولید و اصلاح متن، اتصال سرویس AI لازم است."
+          "درخواست نوشتن یا ویرایش متن را ارسال کن.\n" +
+          "اتصال سرویس نویسندگی هنوز فعال نشده است."
       },
 
       stream_mode: {
@@ -315,12 +377,10 @@ export function registerCommands(bot) {
     })
   })
 
-  // Text messages
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim()
     const userId = ctx.from.id
 
-    // Video links always go to HamoStream
     if (isValidVideoUrl(text)) {
       const id = randomUUID()
 
@@ -346,25 +406,39 @@ export function registerCommands(bot) {
     const mode = userModes.get(userId)
 
     if (mode === "ai") {
+      const history = getHistory(userId)
+
+      history.push({
+        role: "user",
+        content: text
+      })
+
+      if (history.length > MAX_HISTORY) {
+        history.splice(0, history.length - MAX_HISTORY)
+      }
+
       await ctx.reply(
-        "پیامت دریافت شد 🧠\n\n" +
-        "اتصال هوش مصنوعی هنوز فعال نشده است. این قابلیت در مرحله بعد راه‌اندازی می‌شود."
+        "پیامت در حافظه گفت‌وگو ذخیره شد 🧠\n\n" +
+        "هنوز مدل هوش مصنوعی متصل نشده است. پس از اتصال، Hamo AI با توجه به پیام‌های قبلی پاسخ می‌دهد.",
+        { reply_markup: chatMenu() }
       )
       return
     }
 
     if (mode === "translate") {
       await ctx.reply(
-        "متنت دریافت شد 🌐\n\n" +
-        "برای ترجمه هوشمند باید ابتدا سرویس AI را متصل کنیم."
+        "متنت دریافت شد 🌐\n" +
+        "برای ترجمه هوشمند باید سرویس AI متصل شود.",
+        { reply_markup: backMenu() }
       )
       return
     }
 
     if (mode === "writer") {
       await ctx.reply(
-        "درخواستت دریافت شد ✍️\n\n" +
-        "بخش نویسندگی پس از اتصال هوش مصنوعی فعال می‌شود."
+        "درخواستت دریافت شد ✍️\n" +
+        "برای نویسندگی هوشمند باید سرویس AI متصل شود.",
+        { reply_markup: backMenu() }
       )
       return
     }
@@ -379,9 +453,7 @@ export function registerCommands(bot) {
 
     await ctx.reply(
       "برای شروع، از منوی اصلی یک بخش را انتخاب کن:",
-      {
-        reply_markup: mainMenu()
-      }
+      { reply_markup: mainMenu() }
     )
   })
 }

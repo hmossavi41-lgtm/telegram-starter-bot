@@ -7,6 +7,10 @@ import { InlineKeyboard } from "grammy"
 const PUBLIC_URL =
   process.env.PUBLIC_URL || "https://hamodownloader.fadehost.app"
 
+const AI_API_URL = process.env.AI_API_URL
+const AI_API_KEY = process.env.AI_API_KEY
+const AI_MODEL = process.env.AI_MODEL
+
 const videos = new Map()
 const userModes = new Map()
 const conversations = new Map()
@@ -33,8 +37,7 @@ function mainMenu() {
 }
 
 function backMenu() {
-  return new InlineKeyboard()
-    .text("🏠 منوی اصلی", "home")
+  return new InlineKeyboard().text("🏠 منوی اصلی", "home")
 }
 
 function chatMenu() {
@@ -57,8 +60,42 @@ function getHistory(userId) {
   if (!conversations.has(userId)) {
     conversations.set(userId, [])
   }
-
   return conversations.get(userId)
+}
+
+async function askAI(history) {
+  if (!AI_API_URL || !AI_API_KEY || !AI_MODEL) {
+    return "اتصال هوش مصنوعی هنوز تنظیم نشده است."
+  }
+
+  try {
+    const response = await fetch(AI_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: history
+      }),
+      signal: AbortSignal.timeout(60000)
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      console.error("[AI error]", response.status, data)
+      return "ارتباط با هوش مصنوعی برقرار نشد. کمی بعد دوباره تلاش کن."
+    }
+
+    return data.choices?.[0]?.message?.content ||
+      "پاسخی از هوش مصنوعی دریافت نشد."
+
+  } catch (error) {
+    console.error("[AI connection error]", error)
+    return "خطا در اتصال به سرویس هوش مصنوعی."
+  }
 }
 
 function isValidVideoUrl(value) {
@@ -85,9 +122,7 @@ function isValidVideoUrl(value) {
     if (
       host === "cf.linkulu.com" &&
       /^\/dl\/[a-f0-9]+$/i.test(url.pathname)
-    ) {
-      return true
-    }
+    ) return true
 
     return /\.(mp4|m4v|mov|webm)$/i.test(url.pathname)
 
@@ -161,11 +196,7 @@ p { color: #aaa; }
 </head>
 <body>
 <h2>HamoStream 🎬</h2>
-<video
-  src="/stream/${id}"
-  controls
-  playsinline
-  preload="metadata">
+<video src="/stream/${id}" controls playsinline preload="metadata">
 مرورگر شما از پخش ویدئو پشتیبانی نمی‌کند.
 </video>
 <p>پخش آنلاین توسط HamoStream</p>
@@ -251,7 +282,6 @@ export function registerCommands(bot) {
 
   bot.command("start", async (ctx) => {
     userModes.delete(ctx.from.id)
-
     await ctx.reply(MENU_TEXT, {
       reply_markup: mainMenu()
     })
@@ -259,7 +289,6 @@ export function registerCommands(bot) {
 
   bot.command("menu", async (ctx) => {
     userModes.delete(ctx.from.id)
-
     await ctx.reply(MENU_TEXT, {
       reply_markup: mainMenu()
     })
@@ -286,7 +315,6 @@ export function registerCommands(bot) {
 
     if (data === "home") {
       userModes.delete(userId)
-
       await ctx.editMessageText(MENU_TEXT, {
         reply_markup: mainMenu()
       })
@@ -295,12 +323,9 @@ export function registerCommands(bot) {
 
     if (data === "ai_chat") {
       userModes.set(userId, "ai")
-
       await ctx.editMessageText(
         "🧠 گفت‌وگو با Hamo AI\n\n" +
-        "حافظه گفت‌وگو برای تو فعال است.\n" +
-        "پیامت را ارسال کن.\n\n" +
-        "اتصال مدل هوش مصنوعی هنوز انجام نشده است.",
+        "پیامت را ارسال کن.",
         { reply_markup: chatMenu() }
       )
       return
@@ -309,10 +334,8 @@ export function registerCommands(bot) {
     if (data === "new_chat") {
       conversations.set(userId, [])
       userModes.set(userId, "ai")
-
       await ctx.editMessageText(
         "🔄 گفت‌وگوی جدید شروع شد!\n\n" +
-        "حافظه گفت‌وگوی قبلی پاک شد.\n" +
         "پیامت را ارسال کن.",
         { reply_markup: chatMenu() }
       )
@@ -322,7 +345,6 @@ export function registerCommands(bot) {
     if (data === "clear_chat") {
       conversations.set(userId, [])
       userModes.set(userId, "ai")
-
       await ctx.editMessageText(
         "🗑 تاریخچه گفت‌وگو پاک شد.",
         { reply_markup: chatMenu() }
@@ -332,7 +354,6 @@ export function registerCommands(bot) {
 
     if (data === "settings") {
       userModes.delete(userId)
-
       await ctx.editMessageText(
         "⚙️ تنظیمات Hamo AI\n\n" +
         "از این قسمت می‌توانی تاریخچه گفت‌وگو را پاک کنی.",
@@ -344,48 +365,36 @@ export function registerCommands(bot) {
     const sections = {
       ai_translate: {
         mode: "translate",
-        text:
-          "🌐 مترجم Hamo\n\n" +
-          "متنت را ارسال کن.\n" +
-          "اتصال سرویس ترجمه هنوز فعال نشده است."
+        text: "🌐 مترجم Hamo\n\nمتنت را ارسال کن."
       },
-
       ai_writer: {
         mode: "writer",
-        text:
-          "✍️ نویسنده Hamo\n\n" +
-          "درخواست نوشتن یا ویرایش متن را ارسال کن.\n" +
-          "اتصال سرویس نویسندگی هنوز فعال نشده است."
+        text: "✍️ نویسنده Hamo\n\nدرخواست نوشتن یا ویرایش متن را ارسال کن."
       },
-
       stream_mode: {
         mode: "stream",
-        text:
-          "🎬 HamoStream\n\n" +
-          "لینک مستقیم ویدئو یا لینک دانلود پشتیبانی‌شده Linkulu را بفرست."
+        text: "🎬 HamoStream\n\nلینک مستقیم ویدئو یا لینک دانلود پشتیبانی‌شده Linkulu را بفرست."
       }
     }
 
     const section = sections[data]
-
     if (!section) return
 
     userModes.set(userId, section.mode)
-
     await ctx.editMessageText(section.text, {
       reply_markup: backMenu()
     })
   })
 
   bot.on("message:text", async (ctx) => {
-    const text = ctx.message.text.trim()
+    const messageText = ctx.message.text.trim()
     const userId = ctx.from.id
 
-    if (isValidVideoUrl(text)) {
+    if (isValidVideoUrl(messageText)) {
       const id = randomUUID()
 
       videos.set(id, {
-        url: text,
+        url: messageText,
         expires: Date.now() + 7 * 24 * 60 * 60 * 1000
       })
 
@@ -410,36 +419,57 @@ export function registerCommands(bot) {
 
       history.push({
         role: "user",
-        content: text
+        content: messageText
       })
 
       if (history.length > MAX_HISTORY) {
         history.splice(0, history.length - MAX_HISTORY)
       }
 
-      await ctx.reply(
-        "پیامت در حافظه گفت‌وگو ذخیره شد 🧠\n\n" +
-        "هنوز مدل هوش مصنوعی متصل نشده است. پس از اتصال، Hamo AI با توجه به پیام‌های قبلی پاسخ می‌دهد.",
-        { reply_markup: chatMenu() }
-      )
+      await ctx.replyWithChatAction("typing")
+
+      const answer = await askAI(history)
+
+      history.push({
+        role: "assistant",
+        content: answer
+      })
+
+      if (history.length > MAX_HISTORY) {
+        history.splice(0, history.length - MAX_HISTORY)
+      }
+
+      await ctx.reply(answer, {
+        reply_markup: chatMenu()
+      })
       return
     }
 
     if (mode === "translate") {
-      await ctx.reply(
-        "متنت دریافت شد 🌐\n" +
-        "برای ترجمه هوشمند باید سرویس AI متصل شود.",
-        { reply_markup: backMenu() }
-      )
+      userModes.set(userId, "ai")
+      const answer = await askAI([
+        {
+          role: "user",
+          content: `این متن را ترجمه کن. زبان مقصد را از متن درخواست تشخیص بده و اگر مشخص نیست به فارسی ترجمه کن:\n\n${messageText}`
+        }
+      ])
+      await ctx.reply(answer, {
+        reply_markup: backMenu()
+      })
+      userModes.set(userId, "translate")
       return
     }
 
     if (mode === "writer") {
-      await ctx.reply(
-        "درخواستت دریافت شد ✍️\n" +
-        "برای نویسندگی هوشمند باید سرویس AI متصل شود.",
-        { reply_markup: backMenu() }
-      )
+      const answer = await askAI([
+        {
+          role: "user",
+          content: `به عنوان دستیار نویسندگی، این درخواست را انجام بده:\n\n${messageText}`
+        }
+      ])
+      await ctx.reply(answer, {
+        reply_markup: backMenu()
+      })
       return
     }
 

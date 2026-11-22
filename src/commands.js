@@ -2,11 +2,36 @@
 import { createServer } from "node:http"
 import { randomUUID } from "node:crypto"
 import { request } from "undici"
+import { InlineKeyboard } from "grammy"
 
 const PUBLIC_URL =
   process.env.PUBLIC_URL || "https://hamodownloader.fadehost.app"
 
 const videos = new Map()
+const userModes = new Map()
+
+const MENU_TEXT = `
+🤖 به Hamo AI خوش آمدی!
+
+دستیار هوشمند و جعبه‌ابزار شما.
+
+از منوی زیر یک بخش را انتخاب کن:
+`
+
+function mainMenu() {
+  return new InlineKeyboard()
+    .text("🧠 گفت‌وگو با Hamo AI", "ai_chat")
+    .row()
+    .text("🌐 مترجم", "ai_translate")
+    .text("✍️ نویسنده متن", "ai_writer")
+    .row()
+    .text("🎬 HamoStream", "stream_mode")
+}
+
+function backMenu() {
+  return new InlineKeyboard()
+    .text("🏠 منوی اصلی", "home")
+}
 
 function isValidVideoUrl(value) {
   try {
@@ -29,7 +54,6 @@ function isValidVideoUrl(value) {
       /^172\.(1[6-9]|2\d|3[01])\./.test(host)
     ) return false
 
-    // لینک دانلود Linkulu
     if (
       host === "cf.linkulu.com" &&
       /^\/dl\/[a-f0-9]+$/i.test(url.pathname)
@@ -37,7 +61,6 @@ function isValidVideoUrl(value) {
       return true
     }
 
-    // لینک مستقیم ویدئو
     return /\.(mp4|m4v|mov|webm)$/i.test(url.pathname)
 
   } catch {
@@ -45,6 +68,7 @@ function isValidVideoUrl(value) {
   }
 }
 
+// HamoStream server
 function startWebServer() {
   const server = createServer(async (req, res) => {
     try {
@@ -73,7 +97,6 @@ function startWebServer() {
         return
       }
 
-      // صفحه پخش
       if (action === "watch") {
         res.writeHead(200, {
           "Content-Type": "text/html; charset=utf-8",
@@ -110,7 +133,6 @@ p { color: #aaa; }
 </head>
 <body>
 <h2>HamoStream 🎬</h2>
-
 <video
   src="/stream/${id}"
   controls
@@ -118,14 +140,12 @@ p { color: #aaa; }
   preload="metadata">
 مرورگر شما از پخش ویدئو پشتیبانی نمی‌کند.
 </video>
-
 <p>پخش آنلاین توسط HamoStream</p>
 </body>
 </html>`)
         return
       }
 
-      // دریافت ویدئو از سرور اصلی
       const headers = {}
 
       if (req.headers.range) {
@@ -201,49 +221,167 @@ p { color: #aaa; }
 export function registerCommands(bot) {
   startWebServer()
 
+  // Start
   bot.command("start", async (ctx) => {
-    await ctx.reply(
-      "سلام! به HamoStream خوش آمدی 🎬\n\nلینک مستقیم ویدئو یا لینک دانلود پشتیبانی‌شده Linkulu را بفرست تا لینک پخش آنلاین ساخته شود."
-    )
+    userModes.delete(ctx.from.id)
+
+    await ctx.reply(MENU_TEXT, {
+      reply_markup: mainMenu()
+    })
   })
 
+  // Main menu
+  bot.command("menu", async (ctx) => {
+    userModes.delete(ctx.from.id)
+
+    await ctx.reply(MENU_TEXT, {
+      reply_markup: mainMenu()
+    })
+  })
+
+  // Help
   bot.command("help", async (ctx) => {
     await ctx.reply(
-      "راهنما:\n\nلینک مستقیم HTTPS ویدئو با پسوند MP4، MOV، M4V یا WEBM بفرست.\nهمچنین لینک دانلود Linkulu با فرمت /dl/ را می‌پذیرم.\nربات لینک پخش آنلاین می‌سازد."
+      "راهنمای Hamo AI\n\n" +
+      "/start - شروع\n" +
+      "/menu - منوی اصلی\n" +
+      "/ping - بررسی وضعیت ربات\n\n" +
+      "برای پخش ویدئو، لینک مستقیم یا لینک پشتیبانی‌شده Linkulu بفرست."
     )
   })
 
+  // Ping
   bot.command("ping", async (ctx) => {
-    await ctx.reply("HamoStream فعاله ✅")
+    await ctx.reply("Hamo AI و HamoStream فعال هستند ✅")
   })
 
+  // Menu buttons
+  bot.on("callback_query:data", async (ctx) => {
+    const data = ctx.callbackQuery.data
+    const userId = ctx.from.id
+
+    await ctx.answerCallbackQuery()
+
+    if (data === "home") {
+      userModes.delete(userId)
+
+      await ctx.editMessageText(MENU_TEXT, {
+        reply_markup: mainMenu()
+      })
+      return
+    }
+
+    const sections = {
+      ai_chat: {
+        mode: "ai",
+        text:
+          "🧠 گفت‌وگو با Hamo AI\n\n" +
+          "بخش گفت‌وگو انتخاب شد.\n" +
+          "اتصال مدل هوش مصنوعی هنوز فعال نشده و در مرحله بعد اضافه می‌شود."
+      },
+
+      ai_translate: {
+        mode: "translate",
+        text:
+          "🌐 مترجم Hamo\n\n" +
+          "بخش ترجمه انتخاب شد.\n" +
+          "برای فعال‌شدن ترجمه هوشمند، اتصال سرویس AI لازم است."
+      },
+
+      ai_writer: {
+        mode: "writer",
+        text:
+          "✍️ نویسنده Hamo\n\n" +
+          "بخش نویسندگی انتخاب شد.\n" +
+          "برای فعال‌شدن تولید و اصلاح متن، اتصال سرویس AI لازم است."
+      },
+
+      stream_mode: {
+        mode: "stream",
+        text:
+          "🎬 HamoStream\n\n" +
+          "لینک مستقیم ویدئو یا لینک دانلود پشتیبانی‌شده Linkulu را بفرست."
+      }
+    }
+
+    const section = sections[data]
+
+    if (!section) return
+
+    userModes.set(userId, section.mode)
+
+    await ctx.editMessageText(section.text, {
+      reply_markup: backMenu()
+    })
+  })
+
+  // Text messages
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim()
+    const userId = ctx.from.id
 
-    if (!isValidVideoUrl(text)) {
+    // Video links always go to HamoStream
+    if (isValidVideoUrl(text)) {
+      const id = randomUUID()
+
+      videos.set(id, {
+        url: text,
+        expires: Date.now() + 7 * 24 * 60 * 60 * 1000
+      })
+
+      for (const [key, value] of videos) {
+        if (value.expires < Date.now()) {
+          videos.delete(key)
+        }
+      }
+
+      const watchUrl = `${PUBLIC_URL}/watch/${id}`
+
       await ctx.reply(
+        `لینک پخش آنلاین آماده شد 🎬\n\n${watchUrl}\n\nاین لینک تا ۷ روز معتبر است.`
+      )
+      return
+    }
+
+    const mode = userModes.get(userId)
+
+    if (mode === "ai") {
+      await ctx.reply(
+        "پیامت دریافت شد 🧠\n\n" +
+        "اتصال هوش مصنوعی هنوز فعال نشده است. این قابلیت در مرحله بعد راه‌اندازی می‌شود."
+      )
+      return
+    }
+
+    if (mode === "translate") {
+      await ctx.reply(
+        "متنت دریافت شد 🌐\n\n" +
+        "برای ترجمه هوشمند باید ابتدا سرویس AI را متصل کنیم."
+      )
+      return
+    }
+
+    if (mode === "writer") {
+      await ctx.reply(
+        "درخواستت دریافت شد ✍️\n\n" +
+        "بخش نویسندگی پس از اتصال هوش مصنوعی فعال می‌شود."
+      )
+      return
+    }
+
+    if (mode === "stream") {
+      await ctx.reply(
+        "این لینک قابل قبول نیست.\n\n" +
         "لطفاً لینک مستقیم HTTPS ویدئو یا لینک دانلود معتبر Linkulu بفرست."
       )
       return
     }
 
-    const id = randomUUID()
-
-    videos.set(id, {
-      url: text,
-      expires: Date.now() + 6 * 60 * 60 * 1000
-    })
-
-    for (const [key, value] of videos) {
-      if (value.expires < Date.now()) {
-        videos.delete(key)
-      }
-    }
-
-    const watchUrl = `${PUBLIC_URL}/watch/${id}`
-
     await ctx.reply(
-      `لینک پخش آنلاین آماده شد 🎬\n\n${watchUrl}\n\nاین لینک تا ۶ ساعت معتبر است.`
+      "برای شروع، از منوی اصلی یک بخش را انتخاب کن:",
+      {
+        reply_markup: mainMenu()
+      }
     )
   })
 }
